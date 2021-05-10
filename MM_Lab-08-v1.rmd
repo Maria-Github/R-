@@ -1,0 +1,332 @@
+---
+title: Математическое моделирование. Практика 8
+date: "7 мая, 2021"
+author: "Ларшина Мария"
+output:
+  html_document: 
+    always_allow_html: yes
+    df_print: default
+    fig_caption: yes
+    toc: yes
+    toc_float:
+      collapsed: no
+      smooth_scroll: no
+---
+
+```{r formulation, include=FALSE}
+```
+
+# Задание:
+
+Построить две модели для прогноза на основе дерева решений:\
+1. для непрерывной зависимой переменной;\
+2. для категориальной зависимой переменной.
+
+Данные и переменные указаны в таблице с вариантами.\
+Ядро генератора случайных чисел -- номер варианта.
+
+Для каждой модели:\
+1. Указать настроечные параметры метода из своего варианта (например: количество узлов, количество предикторов, скорость обучения).\
+2. Подогнать модель на обучающей выборке (50% наблюдений). Рассчитать **MSE** на тестовой выборке.\
+3. Перестроить модель с помощью метода, указанного в варианте.\
+4. Сделать прогноз по модели с подобранными в п.3 параметрами на тестовой выборке, оценить его точность и построить график «прогноз-реализация».
+
+**Вариант 1**
+
++--------------------+-----------------+-------------------+------------------------------------------------------------------------------------------------------------------------+----------------------------+----------------------------+
+| **Номер варианта** | **Данные**      | **Непрерывный** Y | **Категориальный** Y                                                                                                   | **Объясняющие переменные** | **Метод подгонки моделей** |
++====================+=================+===================+========================================================================================================================+============================+============================+
+| 9                  | `Boston {MASS}` | $medv$            | $high.medv = \begin{cases} \begin{array}{lcl} 1, & если & medv >= 25 \\ 0, & если & medv < 25 \end{array} \end{cases}$ | все остальные              | дерево с обрезкой ветвей   |
++--------------------+-----------------+-------------------+------------------------------------------------------------------------------------------------------------------------+----------------------------+----------------------------+
+
+**Как сдавать**: прислать на почту преподавателя ссылки:
+
+\* на html-отчёт с видимыми блоками кода (блоки кода с параметром `echo = T`), размещённый на [rpubs.com](rpubs.com "rpubs.com").
+
+\* на код, генерирующий отчёт, в репозитории на [github.com](github.com "github.com"). В текст отчёта включить постановку задачи и ответы на вопросы задания.
+
+# Решение:
+
+## Деревья решений
+
+Подключаем набор данных **Boston**
+
+```{r echo=T, message=F}
+library('GGally')            # матричный график разброса ggpairs()
+library('tree')              # деревья tree()
+library(MASS)                # набор данных Boston
+data(Boston)
+head(Boston)
+str(Boston)
+# ?Boston
+```
+
+Загрузим таблицу с данными по стоимости жилья в пригороде Бостона и добавим к ней переменную *high.medv* -- "*высокая медианная стоимость*" со значениями:
+
+**1**, если *medv* \>= 25\
+**0**, если *medv* \< 25
+
+```{r echo = T}
+# новая переменная
+high.medv <- ifelse(Boston$medv >= 25, 1, 0)
+high.medv <- factor(high.medv, labels = c('yes', 'no'))
+Boston$high.medv <- high.medv 
+# матричные графики разброса переменных
+p <- ggpairs(Boston[, c(15, 1:4)], aes(color = high.medv))
+suppressMessages(print(p))
+
+p <- ggpairs(Boston[, c(15, 5:8)], aes(color = high.medv))
+suppressMessages(print(p))
+
+p <- ggpairs(Boston[, c(15, 9:14)], aes(color = high.medv))
+suppressMessages(print(p))
+
+
+# модель бинарного  дерева без переменной medv
+tree.boston <- tree(high.medv ~ (.-medv), Boston)
+summary(tree.boston)
+
+# график результата:
+# ветви
+plot(tree.boston)
+# добавим подписи
+text(tree.boston, pretty = 0)
+
+# посмотреть всё дерево в консоли
+tree.boston                    
+
+```
+
+Теперь построим дерево на обучающей выборке и оценим ошибку на тестовой.
+
+```{r echo = T}
+# ядро генератора случайных чисел по номеру варианта
+my.seed <- 1
+set.seed(my.seed)
+
+# обучающая выборка 50%
+train <- sample(1:nrow(Boston), nrow(Boston)*0.5)
+
+# тестовая выборка
+boston.test <- Boston[-train,]
+high.medv.test <- high.medv[-train]
+
+# строим дерево на обучающей выборке
+tree.boston <- tree(high.medv ~ (.-medv), Boston, subset = train)
+summary(tree.boston)
+
+# делаем прогноз на тестовой
+tree.pred <- predict(tree.boston, boston.test, type = "class")
+
+# матрица неточностей
+tbl <- table(tree.pred, high.medv.test)
+tbl
+
+# ACC на тестовой
+acc.test <- sum(diag(tbl))/sum(tbl)
+names(acc.test)[length(acc.test)] <- 'Boston.class.tree.all'
+acc.test
+
+```
+
+Обобщённая характеристика точности: доля верных прогнозов: [0,869]{.true_part style="color: green;font-size: 16px;font-weight: bold;"}
+
+Теперь обрежем дерево, используя в качестве критерия частоту ошибок классификации. Функция `cv.tree()` проводит кросс-валидацию для выбора лучшего дерева, аргумент `prune.misclass` означает, что мы минимизируем ошибку классификации.
+
+```{r echo = T}
+set.seed(my.seed)
+cv.boston <- cv.tree(tree.boston, FUN = prune.misclass)
+# имена элементов полученного объекта
+names(cv.boston)
+
+# сам объект
+cv.boston
+```
+
+Графики изменения параметров метода по ходу обрезки дерева
+
+```{r echo = T}
+# 1. ошибка с кросс-валидацией в зависимости от числа узлов
+par(mfrow = c(1, 2))
+plot(cv.boston$size, cv.boston$dev, type = "b",
+     ylab = 'Частота ошибок с кросс-вал. (dev)',
+     xlab = 'Число узлов (size)')
+# размер дерева с минимальной ошибкой
+opt.size <- cv.boston$size[cv.boston$dev == min(cv.boston$dev)]
+abline(v = opt.size, col = 'red', 'lwd' = 2)     # соотв. вертикальная прямая
+mtext(opt.size, at = opt.size, side = 1, col = 'red', line = 1)
+
+# 2. ошибка с кросс-валидацией в зависимости от штрафа на сложность
+plot(cv.boston$k, cv.boston$dev, type = "b",
+     ylab = 'Частота ошибок с кросс-вал. (dev)',
+     xlab = 'Штраф за сложность (k)')
+
+```
+
+На графике слева видно, что минимум частоты ошибок достигается при числе узлов **5**.
+
+Оценим точность дерева с **5** узлами.
+
+```{r echo = T}
+# дерево с 5 узлами
+prune.boston <- prune.misclass(tree.boston, best = 5)
+
+# визуализация
+plot(prune.boston)
+text(prune.boston, pretty = 0)
+
+# прогноз на тестовую выборку
+tree.pred <- predict(prune.boston, boston.test, type = "class")
+
+# матрица неточностей
+tbl <- table(tree.pred, high.medv.test)
+tbl
+
+# ACC на тестовой
+acc.test <- c(acc.test, sum(diag(tbl))/sum(tbl))
+names(acc.test)[length(acc.test)] <- 'Boston.class.tree.5'
+acc.test
+
+```
+
+Точность этой модели незначительно снизилась и составляет [**0,857**]{.true_part style="color: green;font-size: 16px;font-weight: bold;"}.
+
+Увеличив количество узлов, получим более глубокое дерево и немого более точное:
+
+```{r echo = T}
+# дерево с 12 узлами
+prune.boston <- prune.misclass(tree.boston, best = 12)
+
+# визуализация
+plot(prune.boston)
+text(prune.boston, pretty = 0)
+
+# прогноз на тестовую выборку
+tree.pred <- predict(prune.boston, boston.test, type = "class")
+
+# матрица неточностей
+tbl <- table(tree.pred, high.medv.test)
+tbl
+
+# ACC на тестовой
+acc.test <- c(acc.test, sum(diag(tbl))/sum(tbl))
+names(acc.test)[length(acc.test)] <- 'Carseats.class.tree.12'
+acc.test
+
+# сбрасываем графические параметры
+par(mfrow = c(1, 1))
+```
+
+## Регрессионные деревья
+
+Продолжим использовать набор данных `Boston`, загрузив его заново
+
+```{r echo=T}
+my.seed <- 1
+data("Boston")
+# ?Boston
+str(Boston)
+head(Boston)
+
+# матричные графики разброса переменных
+p <- ggpairs(Boston[, c(14, 1:4)])
+suppressMessages(print(p))
+
+p <- ggpairs(Boston[, c(14, 5:8)])
+suppressMessages(print(p))
+
+p <- ggpairs(Boston[, c(14, 9:13)])
+suppressMessages(print(p))
+
+# обучающая выборка
+set.seed(my.seed)
+train <- sample(1:nrow(Boston), nrow(Boston)/2) # обучающая выборка -- 50%
+
+```
+
+Построим дерево регрессии для зависимой переменной `medv`: медианная стоимости домов, в которых живут собственники (тыс. долл.).
+
+```{r echo=T}
+# обучаем модель
+tree.boston <- tree(medv ~ ., Boston, subset = train)
+summary(tree.boston)
+
+# визуализация
+plot(tree.boston)
+text(tree.boston, pretty = 0)
+```
+
+Снова сделаем обрезку дерева в целях улучшения качества прогноза.
+
+```{r echo=T}
+# обрезка дерева
+cv.boston <- cv.tree(tree.boston)
+
+# размер дерева с минимальной ошибкой
+plot(cv.boston$size, cv.boston$dev, type = 'b')
+opt.size <- cv.boston$size[cv.boston$dev == min(cv.boston$dev)]
+abline(v = opt.size, col = 'red', 'lwd' = 2)     # соотв. вертикальная прямая
+mtext(opt.size, at = opt.size, side = 1, col = 'red', line = 1)
+```
+
+В данном случаем минимум ошибки соответствует самому сложному дереву, с 7 узлами. Покажем, как при желании можно обрезать дерево до 6 узлов (ошибка ненамного выше, чем минимальная).
+
+```{r echo=T}
+# дерево с 6 узлами
+prune.boston = prune.tree(tree.boston, best = 6)
+
+# визуализация
+plot(prune.boston)
+text(prune.boston, pretty = 0)
+```
+
+Прогноз сначала сделаем по необрезанному дереву, т.к. там ошибка, оцененная по методу перекрёстной проверки, минимальна.
+
+```{r echo=TRUE}
+# прогноз по лучшей модели (7 узлов)
+yhat <- predict(tree.boston, newdata = Boston[-train, ])
+boston.test <- Boston[-train, "medv"]
+
+# график "прогноз -- реализация"
+plot(yhat, boston.test)
+# линия идеального прогноза
+abline(0, 1)
+
+# MSE на тестовой выборке
+mse.test <- mean((yhat - boston.test)^2)
+names(mse.test)[length(mse.test)] <- 'Boston.regr.tree.7'
+mse.test
+```
+
+MSE на тестовой выборке равна [35.28]{style="color: green;font-size: 16px;font-weight: bold;"}.
+
+Теперь сделаем прогноз по [**обрезанному дереву**]{.ul}.
+
+```{r echo=TRUE}
+# прогноз по лучшей модели (6 узлов)
+yhat.prune <- predict(prune.boston, newdata = Boston[-train, ])
+boston.test <- Boston[-train, "medv"]
+
+# график "прогноз -- реализация"
+plot(yhat.prune, boston.test)
+# линия идеального прогноза
+abline(0, 1)
+
+# MSE обрезанного дерева на тестовой выборке
+mse.prune.test <- mean((yhat.prune - boston.test)^2)
+names(mse.prune.test)[length(mse.prune.test)] <- 'Boston.regr.tree.6'
+mse.prune.test
+
+```
+
+MSE [**обрезанного дерева**]{.ul} на тестовой выборке равна [35.16]{style="color: green;font-size: 16px;font-weight: bold;"}
+
+<p align="right">
+
+[*Наверх↑*](#formulation)
+
+</p>
+
+*Источники*
+
+1.  *Джеймс Г., Уиттон Д., Хасти Т., Тибширани Р.* Введение в статистическое обучение с примерами на языке R / пер. с англ. С.Э. Мастицкого. -- М.: ДМК Пресс, **2016** -- 450 с. Репозиторий с примерами к книге на русском языке: <https://github.com/ranalytics/islr-ru>
